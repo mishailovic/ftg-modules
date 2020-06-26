@@ -34,5 +34,5 @@ class WWWTrMod(loader.Module):
             await message.edit("".join(msg))
         else:
             await message.edit("Getting weather...")
-            r = requests.get("https://wttr.in/?format=%l:+%c+%t,+%w+%m")
+            r = requests.get("https://wttr.in/?format=%l:+%c+%t,+%w+%m&m")
             await message.edit(r.text)
