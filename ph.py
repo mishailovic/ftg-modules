@@ -30,9 +30,9 @@ class UploadPHMod(loader.Module):
 					
 				
 			file = await message.client.download_media(data, bytes)
-			path = requests.post('https://te.legra.ph/upload', files={'file': ('file', file, None)}).json()
+			path = requests.post('https://telegra.ph/upload', files={'file': ('file', file, None)}).json()
 			try:
-				link = 'https://te.legra.ph'+path[0]['src']
+				link = 'https://telegra.ph'+path[0]['src']
 			except KeyError:
 				link = path["error"]
 			await message.edit("<b>"+link+"</b>")
