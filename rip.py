@@ -1,3 +1,10 @@
+# Copyright (C) 2019 The Raphielscape Company LLC.
+#
+# Licensed under the Raphielscape Public License, Version 1.c (the "License");
+# you may not use this file except in compliance with the License.
+#
+""" Userbot module containing various scrapers. """
+
 import os
 import time
 import asyncio
@@ -5,6 +12,7 @@ import shutil
 from bs4 import BeautifulSoup
 import re
 from html import unescape
+from googleapiclient.discovery import build
 from requests import get
 
 from youtube_dl import YoutubeDL
@@ -19,13 +27,76 @@ from telethon.tl.types import DocumentAttributeAudio
 from uniborg.util import progress, humanbytes, time_formatter
 
 
+@register(outgoing=True, pattern="^.yt (.*)")
+async def yt_search(video_q):
+    """ For .yt command, do a YouTube search from Telegram. """
+    query = video_q.pattern_match.group(1)
+    result = ''
+
+    if not YOUTUBE_API_KEY:
+        await video_q.edit(
+            "`Error: YouTube API key missing! Add it to environment vars or config.env.`"
+        )
+        return
+
+    await video_q.edit("```Processing...```")
+
+    full_response = await youtube_search(query)
+    videos_json = full_response[1]
+
+    for video in videos_json:
+        title = f"{unescape(video['snippet']['title'])}"
+        link = f"https://youtu.be/{video['id']['videoId']}"
+        result += f"{title}\n{link}\n\n"
+
+    reply_text = f"**Search Query:**\n`{query}`\n\n**Results:**\n\n{result}"
+
+    await video_q.edit(reply_text)
+
+
+async def youtube_search(query,
+                         order="relevance",
+                         token=None,
+                         location=None,
+                         location_radius=None):
+    """ Do a YouTube search. """
+    youtube = build('youtube',
+                    'v3',
+                    developerKey=YOUTUBE_API_KEY,
+                    cache_discovery=False)
+    search_response = youtube.search().list(
+        q=query,
+        type="video",
+        pageToken=token,
+        order=order,
+        part="id,snippet",
+        maxResults=10,
+        location=location,
+        locationRadius=location_radius).execute()
+
+    videos = []
+
+    for search_result in search_response.get("items", []):
+        if search_result["id"]["kind"] == "youtube#video":
+            videos.append(search_result)
+    try:
+        nexttok = search_response["nextPageToken"]
+        return (nexttok, videos)
+    except HttpError:
+        nexttok = "last_page"
+        return (nexttok, videos)
+    except KeyError:
+        nexttok = "KeyError, try again."
+        return (nexttok, videos)
+
+
 @register(outgoing=True, pattern=r".rip (audio|video) (.*)")
 async def download_video(v_url):
-    """ .rip - загружайте медиафайлы с YouTube и многих других сайтов.. """
+    """ For .rip command, download media from YouTube and many other sites. """
     url = v_url.pattern_match.group(2)
     type = v_url.pattern_match.group(1).lower()
-    reply = await v_url.get_reply_message()
-    await v_url.edit("`Подготовка к загрузке...`")
+
+    await v_url.edit("`Preparing to download...`")
 
     if type == "audio":
         opts = {
@@ -87,25 +158,25 @@ async def download_video(v_url):
         video = True
 
     try:
-        await v_url.edit("`Получаем данные, жди...`")
+        await v_url.edit("`Fetching data, please wait..`")
         with YoutubeDL(opts) as rip:
             rip_data = rip.extract_info(url)
     except DownloadError as DE:
         await v_url.edit(f"`{str(DE)}`")
         return
     except ContentTooShortError:
-        await v_url.edit("`Загружаемый контент слишком мелкий.`")
+        await v_url.edit("`The download content was too short.`")
         return
     except GeoRestrictedError:
         await v_url.edit(
-            "`Видео недоступно для вашего географического местоположения из-за географических ограничений, установленных веб-сайтом..`"
+            "`Video is not available from your geographic location due to geographic restrictions imposed by a website.`"
         )
         return
     except MaxDownloadsReached:
-        await v_url.edit("`Лимит загрузок такой: \"оп ахах\".`")
+        await v_url.edit("`Max-downloads limit has been reached.`")
         return
     except PostProcessingError:
-        await v_url.edit("`Ошибка в пост-процессинге.`")
+        await v_url.edit("`There was an error during post processing.`")
         return
     except UnavailableVideoError:
         await v_url.edit("`Media is not available in the requested format.`")
@@ -114,47 +185,43 @@ async def download_video(v_url):
         await v_url.edit(f"`{XAME.code}: {XAME.msg}\n{XAME.reason}`")
         return
     except ExtractorError:
-        await v_url.edit("`Ошибка при экспорте видео.`")
+        await v_url.edit("`There was an error during info extraction.`")
         return
     except Exception as e:
         await v_url.edit(f"{str(type(e)): {str(e)}}")
         return
     c_time = time.time()
     if song:
-        u = rip_data['uploader'] if 'uploader' in rip_data else 'Northing'
-        await v_url.edit(f"`Загружаю аудио:`\
+        await v_url.edit(f"`Preparing to upload song:`\
         \n**{rip_data['title']}**\
-        \nby *{u}*")
+        \nby *{rip_data['uploader']}*")
         await v_url.client.send_file(
             v_url.chat_id,
             f"{rip_data['id']}.mp3",
             supports_streaming=True,
-            reply_to=reply.id if reply else None,
             attributes=[
                 DocumentAttributeAudio(duration=int(rip_data['duration']),
                                        title=str(rip_data['title']),
-                                       performer=u)
+                                       performer=str(rip_data['uploader']))
             ],
             progress_callback=lambda d, t: asyncio.get_event_loop(
             ).create_task(
-                progress(d, t, v_url, c_time, "Загружаю..",
+                progress(d, t, v_url, c_time, "Uploading..",
                          f"{rip_data['title']}.mp3")))
         os.remove(f"{rip_data['id']}.mp3")
         await v_url.delete()
     elif video:
-        u = rip_data['uploader'] if 'uploader' in rip_data else 'Northing'
-        await v_url.edit(f"`Загружаю видосик:`\
+        await v_url.edit(f"`Preparing to upload video:`\
         \n**{rip_data['title']}**\
-        \nby *{u}*")
+        \nby *{rip_data['uploader']}*")
         await v_url.client.send_file(
-            v_url.to_id,
+            v_url.chat_id,
             f"{rip_data['id']}.mp4",
-            reply_to=reply.id if reply else None,
             supports_streaming=True,
             caption=rip_data['title'],
             progress_callback=lambda d, t: asyncio.get_event_loop(
             ).create_task(
-                progress(d, t, v_url, c_time, "Загружаю...",
+                progress(d, t, v_url, c_time, "Uploading..",
                          f"{rip_data['title']}.mp4")))
         os.remove(f"{rip_data['id']}.mp4")
         await v_url.delete()
@@ -165,10 +232,10 @@ async def download_video(v_url):
 
 
 CMD_HELP.update({'yt': '.yt <text>\
-        \nUsage: выполняет поиск на YouTube.'})
+        \nUsage: Does a YouTube search.'})
 
 CMD_HELP.update({
     'rip':
-    '.rip audio <url> or rip video <url>\
-        \nUsage: скачивайте видео и песни с YouTube (и [многие другие сайты](https://ytdl-org.github.io/youtube-dl/supportedsites.html)).'
+    '.ripaudio <url> or ripvideo <url>\
+        \nUsage: Download videos and songs from YouTube (and [many other sites](https://ytdl-org.github.io/youtube-dl/supportedsites.html)).'
 })
